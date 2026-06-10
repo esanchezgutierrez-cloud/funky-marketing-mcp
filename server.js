@@ -1,8 +1,6 @@
 import express from "express";
-import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { z } from "zod";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 
 const app = express();
 const port = process.env.PORT || 10000;
@@ -18,17 +16,17 @@ server.tool(
   "ping_funky_mcp",
   "Comprueba que el servidor MCP de Funky Marketing está funcionando.",
   {},
-  async () => {
-    return {
-      content: [
-        {
-          type: "text",
-          text: "Funky Marketing MCP funciona correctamente.",
-        },
-      ],
-    };
-  }
+  async () => ({
+    content: [
+      {
+        type: "text",
+        text: "Funky Marketing MCP funciona correctamente.",
+      },
+    ],
+  })
 );
+
+const transports = {};
 
 app.get("/", (req, res) => {
   res.send("Funky Marketing MCP server is running.");
@@ -41,17 +39,27 @@ app.get("/health", (req, res) => {
   });
 });
 
-app.post("/mcp", async (req, res) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
+app.get("/sse", async (req, res) => {
+  const transport = new SSEServerTransport("/messages", res);
+  transports[transport.sessionId] = transport;
 
   res.on("close", () => {
-    transport.close();
+    delete transports[transport.sessionId];
   });
 
   await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+});
+
+app.post("/messages", async (req, res) => {
+  const sessionId = req.query.sessionId;
+  const transport = transports[sessionId];
+
+  if (!transport) {
+    res.status(400).send("No transport found for sessionId");
+    return;
+  }
+
+  await transport.handlePostMessage(req, res, req.body);
 });
 
 app.listen(port, "0.0.0.0", () => {
